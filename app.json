@@ -67,7 +67,6 @@
     "pages/login/index"
   ],
   "requiredPrivateInfos": [
-    "getLocation",
     "chooseAddress",
     "chooseLocation"
   ],

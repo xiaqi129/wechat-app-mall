@@ -55,7 +55,8 @@ Page({
     dyunit: 0, // 按天
     dyduration: 1, // 订阅间隔
     dytimes: 1, // 订阅次数
-    dateStart: undefined, // 订阅首次扣费时间
+    dateStart: undefined, // 订阅首次扣费时间qisongjia: "", // 起送价
+    disabledBuy: false,
     minDate: new Date().getTime(),
     maxDate: new Date(2030, 10, 1).getTime(),
     currentDate: new Date().getTime(),
@@ -145,7 +146,9 @@ Page({
         })
       })
     }
+    const qisongjia = Number(wx.getStorageSync('qisongjia'))
     this.setData({
+      qisongjia,
       shopList,
       goodsList,
       peisongType: this.data.peisongType,
@@ -400,6 +403,7 @@ Page({
       let amountLogistics2 = 0
       let deductionMoney = 0
       let couponAmount = 0
+      let disabledBuy = false
       let goodsAdditionalPriceMap = {}
       for (let index = 0; index < shopList.length; index++) {
         const curShop = shopList[index]
@@ -486,7 +490,9 @@ Page({
           goodsAdditionalPriceMap = Object.assign(goodsAdditionalPriceMap, res.data.goodsAdditionalPriceMap)
         }
       }
+      disabledBuy = this.data.qisongjia > allGoodsAndYunPrice && this.data.peisongType == 'kd'
       this.setData({
+        disabledBuy,
         shopList,
         totalScoreToPay,
         isNeedLogistics,
@@ -572,7 +578,9 @@ Page({
             return ele.score > 0
           })
         }
+        const disabledBuy = this.data.qisongjia > res.data.amountReal && this.data.peisongType == 'kd'
         this.setData({
+          disabledBuy,
           shopList,
           totalScoreToPay: res.data.score,
           isNeedLogistics: res.data.isNeedLogistics,

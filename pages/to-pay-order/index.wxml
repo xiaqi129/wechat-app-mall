@@ -257,7 +257,8 @@
   <van-submit-bar
     price="{{ allGoodsAndYunPrice*100 }}"
     suffix-label="{{ totalScoreToPay ? '+' + totalScoreToPay + ' 积分' : '' }}"
-    button-text="提交订单"
+    button-text="{{ disabledBuy ? '¥' + qisongjia + ' 起送': '提交订单' }}"
+    disabled="{{ disabledBuy }}"
     loading="{{ btnLoading }}"
     bind:submit="goCreateOrder"
   />
