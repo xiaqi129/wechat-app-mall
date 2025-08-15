@@ -35,7 +35,11 @@
     "useCompilerPlugins": false,
     "ignoreUploadUnusedFiles": true,
     "useStaticServer": true,
-    "condition": false
+    "condition": false,
+    "compileWorklet": false,
+    "localPlugins": false,
+    "swc": false,
+    "disableSWC": true
   },
   "compileType": "miniprogram",
   "simulatorType": "wechat",
@@ -125,5 +129,6 @@
     "ignore": [],
     "include": []
   },
-  "appid": "wxc9daef6b223c248b"
+  "appid": "wxc9daef6b223c248b",
+  "libVersion": "3.7.12"
 }

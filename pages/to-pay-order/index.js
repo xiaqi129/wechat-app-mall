@@ -55,8 +55,15 @@ Page({
     dyunit: 0, // 按天
     dyduration: 1, // 订阅间隔
     dytimes: 1, // 订阅次数
-    dateStart: undefined, // 订阅首次扣费时间qisongjia: "", // 起送价
+    dateStart: undefined, // 订阅首次扣费时间
+    qisongjia: "", // 起送价
     disabledBuy: false,
+    deliveryStatus: '', // 配送状态：normal正常, outOfRange超出配送范围, belowMinimum未达起送价
+    deliveryMessage: '', // 配送提示信息
+    deliveryButtonText: '', // 配送按钮显示文本
+    userLatitude: null, // 用户地址纬度
+    userLongitude: null, // 用户地址经度
+    availableShops: [], // 可配送的门店列表
     minDate: new Date().getTime(),
     maxDate: new Date(2030, 10, 1).getTime(),
     currentDate: new Date().getTime(),
@@ -80,10 +87,33 @@ Page({
     },
     cardId: '0' // 使用的次卡ID
   },
-  onShow() {
+  async onShow() {
     if (this.data.pageIsEnd) {
       return
     }
+    
+    // 检查地址是否有变化，如果有变化则重新获取经纬度
+    const res = await WXAPI.defaultAddress(wx.getStorageSync('token'))
+    
+    if (res.code == 0 && res.data.info) {
+      const newAddress = res.data.info.address
+      const oldAddress = this.data.curAddressData ? this.data.curAddressData.address : null
+      
+      // 如果地址发生变化，或者没有用户坐标，则重新获取
+      if ((newAddress && newAddress !== oldAddress) || !this.data.userLatitude || !this.data.userLongitude) {
+        const location = await this.getLocationByAddress(newAddress);
+        this.setData({
+          curAddressData: res.data.info,
+          userLatitude: location.latitude,
+          userLongitude: location.longitude
+        });
+        
+        if (this.data.peisongType === 'kd') {
+          await this.validateDeliveryRange();
+        }
+      }
+    }
+    
     this.doneShow()
   },
   async doneShow() {
@@ -113,7 +143,7 @@ Page({
       }
       if (res.code == 0) {
         goodsList = res.data.items.filter(ele => {
-          return ele.selected
+          return ele.selected 
         })
         const shopIds = []
         goodsList.forEach(ele => {
@@ -136,7 +166,6 @@ Page({
       goodsList.forEach(g => {
         Object.keys(_create_order_ext).forEach(k => {
           if (k.split(',').includes(g.goodsId + '')) {
-            console.log(1212, _create_order_ext[k]);
             _create_order_ext[k].split(',').forEach(v => {
               if (!extRequired.includes(v)) {
                 extRequired.push(v)
@@ -225,12 +254,6 @@ Page({
     if (subscribe_ids) {
       wx.requestSubscribeMessage({
         tmplIds: subscribe_ids.split(','),
-        success(res) {
-          console.log(res)
-        },
-        fail(e) {
-          console.error(e)
-        },
         complete: (e) => {
           this.createOrder(true)
         },
@@ -407,7 +430,6 @@ Page({
       let goodsAdditionalPriceMap = {}
       for (let index = 0; index < shopList.length; index++) {
         const curShop = shopList[index]
-        console.log(curShop);
         postData.filterShopId = curShop.id
         if (curShop.curCoupon) {
           postData.couponId = curShop.curCoupon.id
@@ -431,10 +453,8 @@ Page({
         totalRes.data.score += res.data.score
         totalRes.data.amountReal += res.data.amountReal
         totalRes.data.orderIds.push(res.data.id)
-        console.log('e:', e);
         if (!e) {
           curShop.hasNoCoupons = true
-          console.log(curShop);
           if (res.data.couponUserList) {
             curShop.hasNoCoupons = false
             res.data.couponUserList.forEach(ele => {
@@ -490,9 +510,10 @@ Page({
           goodsAdditionalPriceMap = Object.assign(goodsAdditionalPriceMap, res.data.goodsAdditionalPriceMap)
         }
       }
-      disabledBuy = this.data.qisongjia > allGoodsAndYunPrice && this.data.peisongType == 'kd'
+      const buttonStatus = this.calculateButtonStatus(allGoodsAndYunPrice)
       this.setData({
-        disabledBuy,
+        disabledBuy: buttonStatus.disabledBuy,
+        deliveryButtonText: buttonStatus.buttonText,
         shopList,
         totalScoreToPay,
         isNeedLogistics,
@@ -578,9 +599,10 @@ Page({
             return ele.score > 0
           })
         }
-        const disabledBuy = this.data.qisongjia > res.data.amountReal && this.data.peisongType == 'kd'
+        const buttonStatus = this.calculateButtonStatus(res.data.amountReal)
         this.setData({
-          disabledBuy,
+          disabledBuy: buttonStatus.disabledBuy,
+          deliveryButtonText: buttonStatus.buttonText,
           shopList,
           totalScoreToPay: res.data.score,
           isNeedLogistics: res.data.isNeedLogistics,
@@ -719,15 +741,206 @@ Page({
       })
     }
   },
+  // 计算两个经纬度点之间的距离（单位：公里）
+  calculateDistance(lat1, lng1, lat2, lng2) {
+    const radLat1 = (lat1 * Math.PI) / 180;
+    const radLat2 = (lat2 * Math.PI) / 180;
+    const deltaLat = ((lat2 - lat1) * Math.PI) / 180;
+    const deltaLng = ((lng2 - lng1) * Math.PI) / 180;
+    
+    const a = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+              Math.cos(radLat1) * Math.cos(radLat2) *
+              Math.sin(deltaLng / 2) * Math.sin(deltaLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const distance = 6371 * c; // 地球半径约为6371公里
+    
+    return distance;
+  },
+
+  // 计算按钮禁用状态和显示文本
+  calculateButtonStatus(amountReal) {
+    let disabledBuy = false;
+    let buttonText = '提交订单';
+    
+    if (this.data.peisongType === 'kd') {
+      // 快递模式下的状态判断 - 配送状态优先于起送价
+      switch (this.data.deliveryStatus) {
+        case 'outOfRange':
+          disabledBuy = true;
+          buttonText = this.data.deliveryMessage || '超配送范围';
+          break;
+        case 'belowMinimum':
+          disabledBuy = true;
+          buttonText = this.data.deliveryMessage || '未达起送价';
+          break;
+        case 'normal':
+          // 配送正常，但仍需检查起送价
+          const qisongjiaForNormal = Number(this.data.qisongjia);
+          if (qisongjiaForNormal > 0 && qisongjiaForNormal > amountReal) {
+            disabledBuy = true;
+            buttonText = `¥${qisongjiaForNormal} 起送`;
+          } else {
+            disabledBuy = false;
+            buttonText = '提交订单';
+          }
+          break;
+        default:
+          // 未设置配送状态时，检查起送价（向后兼容）
+          const qisongjia = Number(this.data.qisongjia);
+          if (qisongjia > 0 && qisongjia > amountReal) {
+            disabledBuy = true;
+            buttonText = `¥${qisongjia} 起送`;
+          }
+          break;
+      }
+    } else if (this.data.peisongType === 'zq') {
+      // 自取模式：不受起送价限制，直接允许下单
+      disabledBuy = false;
+      buttonText = '提交订单';
+    } else {
+      // 其他模式保持原有逻辑
+      const qisongjia = Number(this.data.qisongjia);
+      if (qisongjia > 0 && qisongjia > amountReal) {
+        disabledBuy = true;
+        buttonText = `¥${qisongjia} 起送`;
+      }
+    }
+    
+    return { disabledBuy, buttonText };
+  },
+
+  // 验证配送范围和获取可用门店
+  async validateDeliveryRange() {
+    if (this.data.peisongType !== 'kd') {
+      return;
+    }
+
+    // 如果没有用户坐标但有地址，尝试获取坐标
+    if ((!this.data.userLatitude || !this.data.userLongitude) && this.data.curAddressData && this.data.curAddressData.address) {
+      const location = await this.getLocationByAddress(this.data.curAddressData.address);
+      this.setData({
+        userLatitude: location.latitude,
+        userLongitude: location.longitude
+      });
+    }
+
+    // 获取所有门店
+    const shopRes = await WXAPI.fetchShops();
+    
+    if (shopRes.code !== 0 || !shopRes.data || shopRes.data.length === 0) {
+      this.setData({
+        deliveryStatus: 'outOfRange',
+        deliveryMessage: '暂无可配送门店',
+        availableShops: []
+      });
+      return;
+    }
+
+    // 过滤正常状态的门店并计算距离
+    const availableShops = [];
+
+    shopRes.data.forEach(shop => {
+      // 检查门店状态
+      if (shop.statusStr !== '正常' || shop.status !== 1) {
+        return;
+      }
+
+      // 检查门店是否有经纬度信息
+      if (!shop.latitude || !shop.longitude) {
+        return;
+      }
+
+      // 计算距离
+      const distance = this.calculateDistance(
+        this.data.userLatitude,
+        this.data.userLongitude,
+        shop.latitude,
+        shop.longitude
+      );
+
+      // 检查是否在配送范围内（serviceDistance单位假设为公里）
+      const serviceDistance = shop.serviceDistance || 0;
+
+      if (serviceDistance > 0 && distance <= serviceDistance) {
+        shop.distanceToUser = distance;
+        availableShops.push(shop);
+      }
+    });
+
+    this.setData({
+      availableShops
+    });
+
+    // 根据可用门店数量设置配送状态
+    if (availableShops.length === 0) {
+      this.setData({
+        deliveryStatus: 'outOfRange',
+        deliveryMessage: '超出配送范围'
+      });
+    } else {
+      // 有可配送门店，设置为正常配送状态
+      // 起送价检查将在calculateButtonStatus()中统一处理
+      this.setData({
+        deliveryStatus: 'normal',
+        deliveryMessage: ''
+      });
+    }
+  },
+
+  // 通过地址获取经纬度
+  async getLocationByAddress(address) {
+    return new Promise((resolve, reject) => {
+      if (!address) {
+        resolve({ latitude: null, longitude: null });
+        return;
+      }
+      
+      // 如果没有经纬度信息，尝试通过微信小程序的地理编码能力获取
+      // 注意：这里简化处理，实际项目中应该根据具体地址进行地理编码
+      // 可以接入腾讯地图、百度地图或高德地图的地理编码API
+      wx.getLocation({
+        type: 'gcj02',
+        success: (res) => {
+          // 获取用户当前位置作为默认位置
+          // 在实际项目中，应该根据具体地址进行地理编码
+          resolve({
+            latitude: res.latitude,
+            longitude: res.longitude
+          });
+        },
+        fail: (error) => {
+          // 如果获取位置失败，返回null
+          resolve({ latitude: null, longitude: null });
+        }
+      });
+    });
+  },
+
   async initShippingAddress() {
     const res = await WXAPI.defaultAddress(wx.getStorageSync('token'))
+    
     if (res.code == 0) {
       this.setData({
         curAddressData: res.data.info
       });
+      
+      // 获取地址经纬度
+      if (res.data.info && res.data.info.address) {
+        const location = await this.getLocationByAddress(res.data.info.address);
+        
+        this.setData({
+          userLatitude: location.latitude,
+          userLongitude: location.longitude
+        });
+        
+        // 验证配送范围
+        await this.validateDeliveryRange();
+      }
     } else {
       this.setData({
-        curAddressData: null
+        curAddressData: null,
+        userLatitude: null,
+        userLongitude: null
       });
     }
     this.processYunfei();
@@ -819,14 +1032,48 @@ Page({
     });
     this.processYunfei()
   },
-  radioChange(e) {
+  async radioChange(e) {
     this.setData({
       peisongType: e.detail.value
     })
-    this.processYunfei()
+    
     if (e.detail.value == 'zq') {
+      // 自取模式：获取门店列表供用户选择
+      // 清除快递模式的配送状态
+      this.setData({
+        deliveryStatus: '',
+        deliveryMessage: '',
+        deliveryButtonText: ''
+      });
       this.fetchShops()
+    } else if (e.detail.value == 'kd') {
+      // 快递模式：验证配送范围
+      
+      // 如果没有用户坐标，先获取地址经纬度
+      if (!this.data.userLatitude || !this.data.userLongitude) {
+        // 重新获取默认地址和经纬度
+        const res = await WXAPI.defaultAddress(wx.getStorageSync('token'))
+        if (res.code == 0 && res.data.info && res.data.info.address) {
+          // 更新地址数据
+          this.setData({
+            curAddressData: res.data.info
+          });
+          
+          // 获取经纬度
+          const location = await this.getLocationByAddress(res.data.info.address);
+          
+          this.setData({
+            userLatitude: location.latitude,
+            userLongitude: location.longitude
+          });
+        }
+      }
+      
+      // 验证配送范围
+      await this.validateDeliveryRange()
     }
+    
+    this.processYunfei()
   },
   dyChange(e) {
     this.setData({
@@ -899,7 +1146,6 @@ Page({
     })
   },
   bindMobileOk(e) {
-    console.log(e.detail); // 这里是组件里data的数据
     this.setData({
       bindMobileShow: false,
       mobile: e.detail.mobile,
@@ -952,7 +1198,6 @@ Page({
       dateStart: d.format('yyyy-MM-dd h:m:s'),
       dateStartpop: false
     })
-    console.log(e);
   },
   dateStartcancel(e) {
     this.setData({
@@ -970,8 +1215,43 @@ Page({
       }
     }
   },
+  // 🧪 测试方法：快速测试配送状态和起送价
+  testDeliveryStatus() {
+    // 测试按钮状态计算
+    const buttonStatus = this.calculateButtonStatus(this.data.allGoodsAndYunPrice);
+    
+    // 应用结果
+    this.setData({
+      disabledBuy: buttonStatus.disabledBuy,
+      deliveryButtonText: buttonStatus.buttonText
+    });
+    
+    wx.showToast({
+      title: buttonStatus.buttonText,
+      icon: 'none',
+      duration: 2000
+    });
+  },
+
+  // 🧪 测试方法：模拟在配送范围内
+  testInRange() {
+    this.setData({
+      deliveryStatus: 'normal',
+      deliveryMessage: ''
+    });
+    this.testDeliveryStatus();
+  },
+
+  // 🧪 测试方法：模拟超出配送范围
+  testOutOfRange() {
+    this.setData({
+      deliveryStatus: 'outOfRange',
+      deliveryMessage: '超出配送范围'
+    });
+    this.testDeliveryStatus();
+  },
+
   paymentOk(e) {
-    console.log(e.detail); // 这里是组件里data的数据
     this.setData({
       paymentShow: false
     })
@@ -990,7 +1270,6 @@ Page({
       extRequiredMap = {}
     }
     extRequiredMap[e.target.dataset.name] = e.detail
-    console.log(extRequiredMap);
     this.setData({
       extRequiredMap
     })

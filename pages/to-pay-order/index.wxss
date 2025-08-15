@@ -8,6 +8,20 @@ page {
   padding-bottom: 48rpx;
 }
 
+/* 提交订单按钮样式优化 */
+.submit-bar .van-submit-bar__button {
+  white-space: nowrap !important;
+}
+
+/* 超出配送范围时的按钮样式 */
+.submit-bar.out-of-range .van-submit-bar__button {
+  font-size: 30rpx !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+
 .address-box {
   width: 100vw;
   margin: 20rpx 0;
